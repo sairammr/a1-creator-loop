@@ -1,0 +1,158 @@
+name: OCI A1 Instance Creation Retry
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '*/10 * * * *'
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  create-instance:
+    runs-on: ubuntu-latest
+    env:
+      OCI_CLI_USER: ${{ secrets.OCI_USER_OCID }}
+      OCI_CLI_TENANCY: ${{ secrets.OCI_TENANCY_OCID }}
+      OCI_CLI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+      OCI_CLI_REGION: ${{ secrets.OCI_REGION }}
+      OCI_CLI_KEY_FILE: ${{ github.workspace }}/.oci/key.pem
+      COMPARTMENT_ID: ${{ secrets.OCI_COMPARTMENT_ID }}
+      SUBNET_ID: ${{ secrets.OCI_SUBNET_ID }}
+      IMAGE_ID: ${{ secrets.OCI_IMAGE_ID }}
+      AD: ${{ secrets.OCI_AD }}
+      SHAPE: VM.Standard.A1.Flex
+      OCPUS: '4'
+      MEMORY_GB: '24'
+      BOOT_VOL_GB: '150'
+      BOOT_VOL_VPUS: '10'
+      DISPLAY_NAME: oci-a1-mumbai
+
+    steps:
+      - name: Install OCI CLI
+        run: |
+          python3 -m pip install --quiet --upgrade pip
+          python3 -m pip install --quiet oci-cli
+          oci --version
+
+      - name: Write OCI private key
+        run: |
+          mkdir -p "${{ github.workspace }}/.oci"
+          printf '%s\n' "${{ secrets.OCI_PRIVATE_KEY }}" > "$OCI_CLI_KEY_FILE"
+          chmod 600 "$OCI_CLI_KEY_FILE"
+
+      - name: Check for existing running A1 instance
+        id: check
+        run: |
+          set -e
+          echo "Querying for running VM.Standard.A1.Flex instances..."
+          ids=$(oci compute instance list \
+            --compartment-id "$COMPARTMENT_ID" \
+            --lifecycle-state RUNNING \
+            --all \
+            --query "data[?shape=='VM.Standard.A1.Flex'].id" \
+            --output json)
+          count=$(echo "$ids" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')
+          echo "Found $count running A1 instance(s)"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+
+      - name: Skip if A1 already exists
+        if: steps.check.outputs.count != '0'
+        run: |
+          echo "::notice::A1 instance already running. Disabling this workflow."
+
+      - name: Disable workflow (already-running path)
+        if: steps.check.outputs.count != '0'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.actions.disableWorkflow({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'oci-instance-retry.yml'
+            });
+
+      - name: Try to create instance
+        if: steps.check.outputs.count == '0'
+        id: create
+        run: |
+          set +e
+          SSH_KEY_FILE="${{ github.workspace }}/.oci/ssh.pub"
+          printf '%s\n' "${{ secrets.SSH_PUBLIC_KEY }}" > "$SSH_KEY_FILE"
+
+          STAMP=$(date +%Y%m%d-%H%M)
+          DN="${DISPLAY_NAME}-${STAMP}"
+
+          echo "Attempting launch in AD: $AD (display-name: $DN)"
+          OUT=$(oci compute instance launch \
+            --availability-domain "$AD" \
+            --compartment-id "$COMPARTMENT_ID" \
+            --shape "$SHAPE" \
+            --shape-config "{\"ocpus\":${OCPUS},\"memoryInGBs\":${MEMORY_GB}}" \
+            --image-id "$IMAGE_ID" \
+            --subnet-id "$SUBNET_ID" \
+            --assign-public-ip true \
+            --boot-volume-size-in-gbs "$BOOT_VOL_GB" \
+            --boot-volume-vpus-per-gb "$BOOT_VOL_VPUS" \
+            --display-name "$DN" \
+            --ssh-authorized-keys-file "$SSH_KEY_FILE" \
+            --wait-for-state RUNNING \
+            --wait-interval-seconds 15 \
+            2>&1)
+          RC=$?
+
+          echo "$OUT"
+
+          if [ $RC -eq 0 ]; then
+            INST_ID=$(echo "$OUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("data",{}).get("id",""))' 2>/dev/null || echo "")
+            echo "success=true" >> "$GITHUB_OUTPUT"
+            echo "instance_id=$INST_ID" >> "$GITHUB_OUTPUT"
+            echo "::notice::Instance created: $INST_ID"
+          elif echo "$OUT" | grep -qE "Out of host capacity|InternalError|TooManyRequests|LimitExceeded"; then
+            echo "::warning::Out of capacity in $AD — will retry next cycle"
+            echo "success=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          else
+            echo "::error::Launch failed with non-capacity error"
+            echo "success=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+      - name: Fetch public IP
+        if: steps.create.outputs.success == 'true'
+        id: ip
+        run: |
+          INST_ID="${{ steps.create.outputs.instance_id }}"
+          VNIC=$(oci compute instance list-vnics --instance-id "$INST_ID" --query 'data[0]."public-ip"' --raw-output)
+          echo "Public IP: $VNIC"
+          echo "public_ip=$VNIC" >> "$GITHUB_OUTPUT"
+
+      - name: Disable workflow on success
+        if: steps.create.outputs.success == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.actions.disableWorkflow({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'oci-instance-retry.yml'
+            });
+            core.notice('Workflow disabled — instance created successfully.');
+
+      - name: Summary
+        if: steps.create.outputs.success == 'true'
+        run: |
+          {
+            echo "## ✅ OCI A1 instance created"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Instance ID | \`${{ steps.create.outputs.instance_id }}\` |"
+            echo "| Public IP | \`${{ steps.ip.outputs.public_ip }}\` |"
+            echo "| Shape | $SHAPE ($OCPUS OCPU / ${MEMORY_GB} GB) |"
+            echo "| Boot vol | ${BOOT_VOL_GB} GB @ ${BOOT_VOL_VPUS} VPU |"
+            echo "| AD | \`$AD\` |"
+            echo ""
+            echo "SSH: \`ssh -i ~/.ssh/oci_a1 ubuntu@${{ steps.ip.outputs.public_ip }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
