@@ -8,6 +8,7 @@ on:
 permissions:
   actions: write
   contents: read
+  issues: write
 
 jobs:
   create-instance:
@@ -128,6 +129,36 @@ jobs:
           VNIC=$(oci compute instance list-vnics --instance-id "$INST_ID" --query 'data[0]."public-ip"' --raw-output)
           echo "Public IP: $VNIC"
           echo "public_ip=$VNIC" >> "$GITHUB_OUTPUT"
+
+      - name: Open GitHub issue on success (notifies you)
+        if: steps.create.outputs.success == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const ip  = '${{ steps.ip.outputs.public_ip }}';
+            const id  = '${{ steps.create.outputs.instance_id }}';
+            const body = [
+              '## ✅ OCI A1 instance is running',
+              '',
+              `**Public IP:** \`${ip}\``,
+              `**Instance ID:** \`${id}\``,
+              '**Shape:** VM.Standard.A1.Flex (4 OCPU / 24 GB)',
+              '**Boot vol:** 150 GB @ 10 VPU',
+              '**AD:** sdRj:AP-MUMBAI-1-AD-1',
+              '',
+              '### SSH in',
+              '```bash',
+              `ssh -i ~/.ssh/oci_a1 ubuntu@${ip}`,
+              '```',
+              '',
+              '_The retry workflow has been disabled. Close this issue when you no longer need the reminder._'
+            ].join('\n');
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              title: `✅ A1 instance running — ${ip}`,
+              body
+            });
 
       - name: Disable workflow on success
         if: steps.create.outputs.success == 'true'
