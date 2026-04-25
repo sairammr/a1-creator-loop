@@ -85,16 +85,17 @@ jobs:
           DN="${DISPLAY_NAME}-${STAMP}"
 
           echo "Attempting launch in AD: $AD (display-name: $DN)"
+          SOURCE_DETAILS=$(printf '{"sourceType":"image","imageId":"%s","bootVolumeSizeInGBs":%s,"bootVolumeVpusPerGB":%s}' \
+            "$IMAGE_ID" "$BOOT_VOL_GB" "$BOOT_VOL_VPUS")
+
           OUT=$(oci compute instance launch \
             --availability-domain "$AD" \
             --compartment-id "$COMPARTMENT_ID" \
             --shape "$SHAPE" \
             --shape-config "{\"ocpus\":${OCPUS},\"memoryInGBs\":${MEMORY_GB}}" \
-            --image-id "$IMAGE_ID" \
+            --source-details "$SOURCE_DETAILS" \
             --subnet-id "$SUBNET_ID" \
             --assign-public-ip true \
-            --boot-volume-size-in-gbs "$BOOT_VOL_GB" \
-            --boot-volume-vpus-per-gb "$BOOT_VOL_VPUS" \
             --display-name "$DN" \
             --ssh-authorized-keys-file "$SSH_KEY_FILE" \
             --wait-for-state RUNNING \
