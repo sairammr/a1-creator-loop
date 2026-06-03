@@ -54,7 +54,7 @@ jobs:
             --all \
             --query "data[?shape=='VM.Standard.A1.Flex'].id" \
             --output json)
-          count=$(echo "$ids" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')
+          count=$(echo "${ids:-[]}" | python3 -c 'import json,sys; s=sys.stdin.read().strip() or "[]"; print(len(json.loads(s)))')
           echo "Found $count running A1 instance(s)"
           echo "count=$count" >> "$GITHUB_OUTPUT"
 
