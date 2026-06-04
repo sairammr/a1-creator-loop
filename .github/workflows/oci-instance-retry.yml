@@ -3,7 +3,7 @@ name: OCI A1 Instance Creation Retry
 on:
   workflow_dispatch:
   schedule:
-    - cron: '7,27,47 * * * *'
+    - cron: '*/5 * * * *'
 
 permissions:
   actions: write
