@@ -7,7 +7,7 @@ set -e
 COMPARTMENT="ocid1.tenancy.oc1..aaaaaaaabdqwyhgtxgscos442qd3xjit2zlf2llz36imayumdowaf4riy43q"
 SHAPE="VM.Standard.A1.Flex"
 
-echo "Querying OCI for A1 instances in ap-mumbai-1..."
+echo "Querying OCI for A1 instances in ap-hyderabad-1..."
 echo ""
 
 OUT=$(oci compute instance list \
@@ -22,8 +22,8 @@ if [ "$COUNT" = "0" ]; then
   echo "❌ No A1 instances yet. The workflow is still retrying."
   echo ""
   echo "Last 3 workflow runs:"
-  gh run list -R Philotheephilix/a1-creator-loop --workflow=oci-instance-retry.yml --limit 3 2>/dev/null || \
-    echo "  (gh CLI not configured — visit https://github.com/Philotheephilix/a1-creator-loop/actions)"
+  gh run list -R sairammr/a1-creator-loop --workflow=oci-instance-retry.yml --limit 3 2>/dev/null || \
+    echo "  (gh CLI not configured — visit https://github.com/sairammr/a1-creator-loop/actions)"
   exit 0
 fi
 

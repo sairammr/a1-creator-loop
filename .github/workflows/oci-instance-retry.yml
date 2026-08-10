@@ -1,4 +1,4 @@
-name: OCI A1 Instance Creation Retry
+name: OCI Free Micro Instance Retry
 
 on:
   workflow_dispatch:
@@ -23,12 +23,8 @@ jobs:
       SUBNET_ID: ${{ secrets.OCI_SUBNET_ID }}
       IMAGE_ID: ${{ secrets.OCI_IMAGE_ID }}
       AD: ${{ secrets.OCI_AD }}
-      SHAPE: VM.Standard.A1.Flex
-      OCPUS: '4'
-      MEMORY_GB: '24'
-      BOOT_VOL_GB: '150'
-      BOOT_VOL_VPUS: '10'
-      DISPLAY_NAME: oci-a1-mumbai
+      SHAPE: VM.Standard.E2.1.Micro
+      DISPLAY_NAME: free-micro-hyd
 
     steps:
       - name: Install OCI CLI
@@ -43,31 +39,27 @@ jobs:
           printf '%s\n' "${{ secrets.OCI_PRIVATE_KEY }}" > "$OCI_CLI_KEY_FILE"
           chmod 600 "$OCI_CLI_KEY_FILE"
 
-      - name: Check for existing running A1 instance
+      - name: Check for existing micro instance
         id: check
         run: |
           set -e
-          echo "Querying for running VM.Standard.A1.Flex instances..."
+          echo "Querying for running $SHAPE instances..."
           ids=$(oci compute instance list \
             --compartment-id "$COMPARTMENT_ID" \
             --lifecycle-state RUNNING \
             --all \
-            --query "data[?shape=='VM.Standard.A1.Flex'].id" \
+            --query "data[?shape=='$SHAPE'].id" \
             --output json)
           count=$(echo "${ids:-[]}" | python3 -c 'import json,sys; s=sys.stdin.read().strip() or "[]"; print(len(json.loads(s)))')
-          echo "Found $count running A1 instance(s)"
+          echo "Found $count running micro instance(s)"
           echo "count=$count" >> "$GITHUB_OUTPUT"
-
-      - name: Skip if A1 already exists
-        if: steps.check.outputs.count != '0'
-        run: |
-          echo "::notice::A1 instance already running. Disabling this workflow."
 
       - name: Disable workflow (already-running path)
         if: steps.check.outputs.count != '0'
         uses: actions/github-script@v7
         with:
           script: |
+            core.notice('Micro instance already running. Disabling workflow.');
             await github.rest.actions.disableWorkflow({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -86,15 +78,11 @@ jobs:
           DN="${DISPLAY_NAME}-${STAMP}"
 
           echo "Attempting launch in AD: $AD (display-name: $DN)"
-          SOURCE_DETAILS=$(printf '{"sourceType":"image","imageId":"%s","bootVolumeSizeInGBs":%s,"bootVolumeVpusPerGB":%s}' \
-            "$IMAGE_ID" "$BOOT_VOL_GB" "$BOOT_VOL_VPUS")
-
           OUT=$(oci compute instance launch \
             --availability-domain "$AD" \
             --compartment-id "$COMPARTMENT_ID" \
             --shape "$SHAPE" \
-            --shape-config "{\"ocpus\":${OCPUS},\"memoryInGBs\":${MEMORY_GB}}" \
-            --source-details "$SOURCE_DETAILS" \
+            --image-id "$IMAGE_ID" \
             --subnet-id "$SUBNET_ID" \
             --assign-public-ip true \
             --display-name "$DN" \
@@ -138,25 +126,24 @@ jobs:
             const ip  = '${{ steps.ip.outputs.public_ip }}';
             const id  = '${{ steps.create.outputs.instance_id }}';
             const body = [
-              '## ✅ OCI A1 instance is running',
+              '## ✅ OCI free micro instance is running',
               '',
               `**Public IP:** \`${ip}\``,
               `**Instance ID:** \`${id}\``,
-              '**Shape:** VM.Standard.A1.Flex (4 OCPU / 24 GB)',
-              '**Boot vol:** 150 GB @ 10 VPU',
-              '**AD:** sdRj:AP-MUMBAI-1-AD-1',
+              '**Shape:** VM.Standard.E2.1.Micro (1 OCPU / 1 GB, Always Free)',
+              '**AD:** fLpW:AP-HYDERABAD-1-AD-1',
               '',
               '### SSH in',
               '```bash',
               `ssh -i ~/.ssh/oci_a1 ubuntu@${ip}`,
               '```',
               '',
-              '_The retry workflow has been disabled. Close this issue when you no longer need the reminder._'
+              '_The retry workflow has been disabled. Close this issue when done._'
             ].join('\n');
             await github.rest.issues.create({
               owner: context.repo.owner,
               repo:  context.repo.repo,
-              title: `✅ A1 instance running — ${ip}`,
+              title: `✅ Micro instance running — ${ip}`,
               body
             });
 
@@ -171,20 +158,3 @@ jobs:
               workflow_id: 'oci-instance-retry.yml'
             });
             core.notice('Workflow disabled — instance created successfully.');
-
-      - name: Summary
-        if: steps.create.outputs.success == 'true'
-        run: |
-          {
-            echo "## ✅ OCI A1 instance created"
-            echo ""
-            echo "| Field | Value |"
-            echo "|---|---|"
-            echo "| Instance ID | \`${{ steps.create.outputs.instance_id }}\` |"
-            echo "| Public IP | \`${{ steps.ip.outputs.public_ip }}\` |"
-            echo "| Shape | $SHAPE ($OCPUS OCPU / ${MEMORY_GB} GB) |"
-            echo "| Boot vol | ${BOOT_VOL_GB} GB @ ${BOOT_VOL_VPUS} VPU |"
-            echo "| AD | \`$AD\` |"
-            echo ""
-            echo "SSH: \`ssh -i ~/.ssh/oci_a1 ubuntu@${{ steps.ip.outputs.public_ip }}\`"
-          } >> "$GITHUB_STEP_SUMMARY"
